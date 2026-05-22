@@ -115,19 +115,20 @@ class Predictor(BasePredictor):
                 )
             print("[Diarize] loading pyannote...")
             t0 = time.time()
-            # huggingface-hub 新版移除了 use_auth_token kwarg；改走環境變數，
-            # pyannote 內部會自動讀 HF_TOKEN（也支援 HUGGINGFACE_HUB_TOKEN）
+            # cog.yaml 已 pin huggingface-hub<0.24，use_auth_token kwarg 可用。
+            # 同時設環境變數作雙重保險。
             os.environ["HF_TOKEN"] = hf_token
-            os.environ["HUGGINGFACE_HUB_TOKEN"] = hf_token
-            try:
-                pipeline = PyannotePipeline.from_pretrained(
-                    "pyannote/speaker-diarization-3.1",
-                )
-            except TypeError:
-                # 後備：舊版 pyannote 仍接受 use_auth_token
-                pipeline = PyannotePipeline.from_pretrained(
-                    "pyannote/speaker-diarization-3.1",
-                    use_auth_token=hf_token,
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = hf_token
+            pipeline = PyannotePipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                use_auth_token=hf_token,
+            )
+            if pipeline is None:
+                raise RuntimeError(
+                    "Pyannote returned None — usually means: "
+                    "(1) hf_token invalid, "
+                    "(2) you haven't accepted pyannote/speaker-diarization-3.1 terms at https://hf.co/pyannote/speaker-diarization-3.1, "
+                    "(3) you haven't accepted pyannote/segmentation-3.0 terms at https://hf.co/pyannote/segmentation-3.0"
                 )
             if torch.cuda.is_available():
                 pipeline = pipeline.to(torch.device("cuda"))
