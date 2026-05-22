@@ -9,11 +9,14 @@ build:
     - torch==2.1.2
     - torchaudio==2.1.2
     - numpy<2.0
+    - huggingface-hub<0.24
     - faster-whisper>=1.0.0
     - python-dotenv>=1.0
   run:
     # Install pyannote.audio via direct pip (Cog 0.9.8 misparses dotted package names).
-    # Re-pin numpy<2 here because pyannote's transitive deps would otherwise upgrade it.
-    - pip install "pyannote.audio==3.1.1" "numpy<2"
+    # Re-pin numpy<2 + huggingface-hub<0.24 to prevent transitive upgrades:
+    # - pyannote 3.1.1 internally calls hf_hub_download(use_auth_token=...),
+    #   which was REMOVED in huggingface-hub >= 0.24
+    - pip install "pyannote.audio==3.1.1" "numpy<2" "huggingface-hub<0.24"
 
 predict: predict.py:Predictor
