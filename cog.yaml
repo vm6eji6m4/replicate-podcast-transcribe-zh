@@ -9,8 +9,10 @@ build:
     - torch==2.1.2
     - torchaudio==2.1.2
     - numpy<2.0
-    - pyannote.audio==3.1.1
     - faster-whisper>=1.0.0
     - python-dotenv>=1.0
+  run:
+    # Install pyannote.audio via direct pip (Cog 0.9.8 misparses dotted package names)
+    - pip install "pyannote.audio==3.1.1"
 
 predict: predict.py:Predictor
