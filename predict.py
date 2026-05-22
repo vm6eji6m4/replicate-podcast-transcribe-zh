@@ -115,15 +115,19 @@ class Predictor(BasePredictor):
                 )
             print("[Diarize] loading pyannote...")
             t0 = time.time()
+            # huggingface-hub 新版移除了 use_auth_token kwarg；改走環境變數，
+            # pyannote 內部會自動讀 HF_TOKEN（也支援 HUGGINGFACE_HUB_TOKEN）
+            os.environ["HF_TOKEN"] = hf_token
+            os.environ["HUGGINGFACE_HUB_TOKEN"] = hf_token
             try:
                 pipeline = PyannotePipeline.from_pretrained(
                     "pyannote/speaker-diarization-3.1",
-                    use_auth_token=hf_token,
                 )
             except TypeError:
+                # 後備：舊版 pyannote 仍接受 use_auth_token
                 pipeline = PyannotePipeline.from_pretrained(
                     "pyannote/speaker-diarization-3.1",
-                    token=hf_token,
+                    use_auth_token=hf_token,
                 )
             if torch.cuda.is_available():
                 pipeline = pipeline.to(torch.device("cuda"))
