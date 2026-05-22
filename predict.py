@@ -54,13 +54,8 @@ DEFAULT_MODEL_BY_LANG = {
 
 class Predictor(BasePredictor):
     def setup(self) -> None:
-        """Replicate 啟動時呼叫，預先載入模型權重。"""
-        # 預下載 pyannote 模型權重（HF_TOKEN 由 Replicate 環境變數提供）
-        self.hf_token = os.environ.get("HF_TOKEN", "")
-        if not self.hf_token:
-            print("[setup] WARN: HF_TOKEN not set. Diarization will fail.")
-        # 不在 setup 載入模型本體（serverless 環境每次 cold start 都會跑）
-        # 改在 predict 第一次呼叫時 lazy load
+        """Replicate 啟動時呼叫。pyannote / whisper 模型在第一次 predict 才 lazy load。"""
+        pass
 
     def predict(
         self,
@@ -89,6 +84,16 @@ class Predictor(BasePredictor):
             default="srt",
             choices=["srt", "json", "plain"],
         ),
+        hf_token: str = Input(
+            description=(
+                "HuggingFace token（diarization 需要）。"
+                "申請：https://huggingface.co/settings/tokens（Read 即可）。"
+                "首次使用要先接受兩個模型條款："
+                "https://hf.co/pyannote/speaker-diarization-3.1 + "
+                "https://hf.co/pyannote/segmentation-3.0"
+            ),
+            default="",
+        ),
     ) -> dict:
         """跑 diarize → transcribe → align → merge，回傳 dict。"""
         from pyannote.audio import Pipeline as PyannotePipeline
@@ -101,22 +106,24 @@ class Predictor(BasePredictor):
         # ---- Diarization ----
         speaker_segs: list[tuple[float, float, str]] = []
         if enable_diarization:
-            if not self.hf_token:
+            if not hf_token:
                 raise RuntimeError(
-                    "HF_TOKEN required for diarization. Set it as a Replicate secret, "
-                    "or pass enable_diarization=False."
+                    "hf_token required for diarization. "
+                    "Get one at https://huggingface.co/settings/tokens, "
+                    "then accept pyannote model terms. "
+                    "Or pass enable_diarization=False to skip."
                 )
             print("[Diarize] loading pyannote...")
             t0 = time.time()
             try:
                 pipeline = PyannotePipeline.from_pretrained(
                     "pyannote/speaker-diarization-3.1",
-                    use_auth_token=self.hf_token,
+                    use_auth_token=hf_token,
                 )
             except TypeError:
                 pipeline = PyannotePipeline.from_pretrained(
                     "pyannote/speaker-diarization-3.1",
-                    token=self.hf_token,
+                    token=hf_token,
                 )
             if torch.cuda.is_available():
                 pipeline = pipeline.to(torch.device("cuda"))
