@@ -12,7 +12,8 @@ build:
     - faster-whisper>=1.0.0
     - python-dotenv>=1.0
   run:
-    # Install pyannote.audio via direct pip (Cog 0.9.8 misparses dotted package names)
-    - pip install "pyannote.audio==3.1.1"
+    # Install pyannote.audio via direct pip (Cog 0.9.8 misparses dotted package names).
+    # Re-pin numpy<2 here because pyannote's transitive deps would otherwise upgrade it.
+    - pip install "pyannote.audio==3.1.1" "numpy<2"
 
 predict: predict.py:Predictor
