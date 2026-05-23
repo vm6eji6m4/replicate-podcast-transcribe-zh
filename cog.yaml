@@ -11,7 +11,7 @@ build:
     - numpy==1.26.4
     - pyannote-audio==3.3.0
     - huggingface-hub==0.23.5
-    - faster-whisper==1.0.3
+    - faster-whisper==1.1.1
     - python-dotenv==1.0.1
 
 predict: predict.py:Predictor
