@@ -1,6 +1,10 @@
 """
-Replicate Cog predictor — Chinese/Taiwanese Podcast Transcribe
+Replicate Cog predictor — Mandarin Chinese + English Podcast Transcribe
 Whisper large-v3-turbo (zh/ja/ko) + distil-large-v3 (en) + pyannote 3.3 diarization
+
+Supported languages: zh (Mandarin), en (English), ja, ko.
+NOT supported: Taiwanese Hokkien (台語), Cantonese, other Chinese dialects
+— Whisper cannot transcribe these natively; output will be garbled.
 """
 from __future__ import annotations
 
@@ -65,7 +69,7 @@ class Predictor(BasePredictor):
             choices=["zh", "en", "ja", "ko"],
         ),
         hotwords: str = Input(
-            description="Proper nouns / Taiwanese terms to bias Whisper (e.g. '黃詹 蔡瀾 百靈果').",
+            description="Proper nouns to bias Whisper (e.g. '蔡康永 黃詹 OpenAI Anthropic').",
             default="",
         ),
         enable_diarization: bool = Input(
