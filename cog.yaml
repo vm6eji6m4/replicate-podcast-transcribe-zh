@@ -9,7 +9,8 @@ build:
     - torch==2.3.1
     - torchaudio==2.3.1
     - numpy==1.26.4
-    - "pyannote.audio==3.3.0"
+    - pyannote-audio==3.3.0
+    - huggingface-hub==0.23.5
     - faster-whisper==1.0.3
     - python-dotenv==1.0.1
 

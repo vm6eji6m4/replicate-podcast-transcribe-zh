@@ -114,7 +114,7 @@ class Predictor(BasePredictor):
             t0 = time.time()
             pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
-                token=hf_token,
+                use_auth_token=hf_token,
             )
             if pipeline is None:
                 raise RuntimeError(
