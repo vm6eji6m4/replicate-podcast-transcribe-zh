@@ -10,6 +10,37 @@ import os
 import time
 from typing import Optional
 
+# ---- Compatibility shim for pyannote.audio 3.1.1 on new huggingface-hub ----
+# pyannote 3.1.1 calls hf_hub_download(use_auth_token=...), but huggingface-hub >=0.24
+# removed that kwarg (replaced by `token`). Patch hf_hub_download to translate.
+def _patch_hf_hub_for_pyannote() -> None:
+    try:
+        import huggingface_hub as _hh
+        _orig = _hh.hf_hub_download
+
+        def _shimmed(*args, **kwargs):
+            if "use_auth_token" in kwargs and "token" not in kwargs:
+                kwargs["token"] = kwargs.pop("use_auth_token")
+            elif "use_auth_token" in kwargs:
+                kwargs.pop("use_auth_token", None)
+            return _orig(*args, **kwargs)
+
+        _hh.hf_hub_download = _shimmed
+        # Some sub-modules import at module-load time; patch those too if present.
+        for mod_name in ("huggingface_hub.file_download", "huggingface_hub._snapshot_download"):
+            try:
+                mod = __import__(mod_name, fromlist=["hf_hub_download"])
+                if hasattr(mod, "hf_hub_download"):
+                    mod.hf_hub_download = _shimmed
+            except Exception:
+                pass
+        print("[shim] huggingface_hub.hf_hub_download patched (use_auth_token -> token)")
+    except Exception as e:
+        print(f"[shim] failed to patch hf_hub_download: {e}")
+
+
+_patch_hf_hub_for_pyannote()
+
 from cog import BasePredictor, Input, Path
 
 
