@@ -13,7 +13,7 @@ import os
 import time
 from typing import Optional
 
-from cog import BasePredictor, Input, Path
+from cog import BasePredictor, Input, Path, Secret
 
 
 DEFAULT_MODEL_BY_LANG = {
@@ -87,14 +87,14 @@ class Predictor(BasePredictor):
             default="srt",
             choices=["srt", "json", "plain"],
         ),
-        hf_token: str = Input(
+        hf_token: Secret = Input(
             description=(
-                "HuggingFace token (Read scope). Required if enable_diarization=True. "
+                "HuggingFace token (Read scope), masked. Required if enable_diarization=True. "
                 "Get one at https://huggingface.co/settings/tokens. "
                 "Then accept terms at https://hf.co/pyannote/speaker-diarization-3.1 "
                 "and https://hf.co/pyannote/segmentation-3.0."
             ),
-            default="",
+            default=None,
         ),
     ) -> dict:
         import torch
@@ -105,8 +105,9 @@ class Predictor(BasePredictor):
 
         # ---- Diarization (pyannote 3.3) ----
         speaker_segs: list[tuple[float, float, str]] = []
+        token_str = hf_token.get_secret_value() if hf_token else ""
         if enable_diarization:
-            if not hf_token:
+            if not token_str:
                 raise RuntimeError(
                     "hf_token required when enable_diarization=True. "
                     "Get one at https://huggingface.co/settings/tokens, "
@@ -118,7 +119,7 @@ class Predictor(BasePredictor):
             t0 = time.time()
             pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
-                use_auth_token=hf_token,
+                use_auth_token=token_str,
             )
             if pipeline is None:
                 raise RuntimeError(
