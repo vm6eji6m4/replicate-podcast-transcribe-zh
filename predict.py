@@ -1,47 +1,23 @@
 """
-Replicate Cog predictor — Podcast / 多人語者轉錄
-中文/台語預設用 large-v3-turbo + pyannote diarization
+Replicate Cog predictor — Chinese/Taiwanese Podcast Transcribe
+Whisper large-v3-turbo (zh/ja/ko) + distil-large-v3 (en) + pyannote 3.3 diarization
 """
 from __future__ import annotations
 
 import gc
-import json
 import os
 import time
 from typing import Optional
 
-# ---- Compatibility shim for pyannote.audio 3.1.1 on new huggingface-hub ----
-# pyannote 3.1.1 calls hf_hub_download(use_auth_token=...), but huggingface-hub >=0.24
-# removed that kwarg (replaced by `token`). Patch hf_hub_download to translate.
-def _patch_hf_hub_for_pyannote() -> None:
-    try:
-        import huggingface_hub as _hh
-        _orig = _hh.hf_hub_download
-
-        def _shimmed(*args, **kwargs):
-            if "use_auth_token" in kwargs and "token" not in kwargs:
-                kwargs["token"] = kwargs.pop("use_auth_token")
-            elif "use_auth_token" in kwargs:
-                kwargs.pop("use_auth_token", None)
-            return _orig(*args, **kwargs)
-
-        _hh.hf_hub_download = _shimmed
-        # Some sub-modules import at module-load time; patch those too if present.
-        for mod_name in ("huggingface_hub.file_download", "huggingface_hub._snapshot_download"):
-            try:
-                mod = __import__(mod_name, fromlist=["hf_hub_download"])
-                if hasattr(mod, "hf_hub_download"):
-                    mod.hf_hub_download = _shimmed
-            except Exception:
-                pass
-        print("[shim] huggingface_hub.hf_hub_download patched (use_auth_token -> token)")
-    except Exception as e:
-        print(f"[shim] failed to patch hf_hub_download: {e}")
-
-
-_patch_hf_hub_for_pyannote()
-
 from cog import BasePredictor, Input, Path
+
+
+DEFAULT_MODEL_BY_LANG = {
+    "zh": "large-v3-turbo",
+    "ja": "large-v3-turbo",
+    "ko": "large-v3-turbo",
+    "en": "distil-large-v3",
+}
 
 
 def _ts_srt(sec: float) -> str:
@@ -75,94 +51,81 @@ def _release_cuda():
         pass
 
 
-DEFAULT_MODEL_BY_LANG = {
-    "zh": "large-v3-turbo",
-    "ja": "large-v3-turbo",
-    "ko": "large-v3-turbo",
-    "en": "distil-large-v3",
-}
-
-
 class Predictor(BasePredictor):
     def setup(self) -> None:
-        """Replicate 啟動時呼叫。pyannote / whisper 模型在第一次 predict 才 lazy load。"""
+        # Lazy-load models in predict() to allow per-call language selection.
         pass
 
     def predict(
         self,
-        audio: Path = Input(description="音檔（mp3/wav/m4a，建議 < 60 分鐘）"),
+        audio: Path = Input(description="Audio file (mp3/wav/m4a/mp4), recommended < 60 min"),
         language: str = Input(
-            description="語言代碼。zh/ja/ko 用 large-v3-turbo；en 用 distil-large-v3",
+            description="Language code. zh/ja/ko use large-v3-turbo, en uses distil-large-v3.",
             default="zh",
             choices=["zh", "en", "ja", "ko"],
         ),
         hotwords: str = Input(
-            description="熱詞/專有名詞（選填，會注入 Whisper initial_prompt，提升人名/台語準確度）",
+            description="Proper nouns / Taiwanese terms to bias Whisper (e.g. '黃詹 蔡瀾 百靈果').",
             default="",
         ),
         enable_diarization: bool = Input(
-            description="是否做多人語者辨識（關掉可省 ~30% 時間）",
+            description="Run speaker diarization (requires hf_token). Disable to skip ~30% time.",
             default=True,
         ),
         gap_threshold: float = Input(
-            description="合併同 speaker 相鄰段的最大間隔秒數",
+            description="Merge adjacent same-speaker segments within this gap (seconds).",
             default=1.5,
             ge=0.1,
             le=5.0,
         ),
         output_format: str = Input(
-            description="主要輸出格式（會同時回傳 JSON 詳細結果）",
+            description="Primary output format. JSON segments are always included.",
             default="srt",
             choices=["srt", "json", "plain"],
         ),
         hf_token: str = Input(
             description=(
-                "HuggingFace token（diarization 需要）。"
-                "申請：https://huggingface.co/settings/tokens（Read 即可）。"
-                "首次使用要先接受兩個模型條款："
-                "https://hf.co/pyannote/speaker-diarization-3.1 + "
-                "https://hf.co/pyannote/segmentation-3.0"
+                "HuggingFace token (Read scope). Required if enable_diarization=True. "
+                "Get one at https://huggingface.co/settings/tokens. "
+                "Then accept terms at https://hf.co/pyannote/speaker-diarization-3.1 "
+                "and https://hf.co/pyannote/segmentation-3.0."
             ),
             default="",
         ),
     ) -> dict:
-        """跑 diarize → transcribe → align → merge，回傳 dict。"""
-        from pyannote.audio import Pipeline as PyannotePipeline
-        from faster_whisper import WhisperModel
         import torch
+        from faster_whisper import WhisperModel
 
-        audio_path = str(audio)
         t_start = time.time()
+        audio_path = str(audio)
 
-        # ---- Diarization ----
+        # ---- Diarization (pyannote 3.3) ----
         speaker_segs: list[tuple[float, float, str]] = []
         if enable_diarization:
             if not hf_token:
                 raise RuntimeError(
-                    "hf_token required for diarization. "
+                    "hf_token required when enable_diarization=True. "
                     "Get one at https://huggingface.co/settings/tokens, "
-                    "then accept pyannote model terms. "
-                    "Or pass enable_diarization=False to skip."
+                    "accept pyannote model terms, or set enable_diarization=False."
                 )
-            print("[Diarize] loading pyannote...")
+            from pyannote.audio import Pipeline
+
+            print("[Diarize] loading pyannote.audio 3.3 pipeline...")
             t0 = time.time()
-            # cog.yaml 已 pin huggingface-hub<0.24，use_auth_token kwarg 可用。
-            # 同時設環境變數作雙重保險。
-            os.environ["HF_TOKEN"] = hf_token
-            os.environ["HUGGING_FACE_HUB_TOKEN"] = hf_token
-            pipeline = PyannotePipeline.from_pretrained(
+            pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
-                use_auth_token=hf_token,
+                token=hf_token,
             )
             if pipeline is None:
                 raise RuntimeError(
-                    "Pyannote returned None — usually means: "
-                    "(1) hf_token invalid, "
-                    "(2) you haven't accepted pyannote/speaker-diarization-3.1 terms at https://hf.co/pyannote/speaker-diarization-3.1, "
-                    "(3) you haven't accepted pyannote/segmentation-3.0 terms at https://hf.co/pyannote/segmentation-3.0"
+                    "Pyannote returned None. Likely causes: "
+                    "(1) hf_token invalid; "
+                    "(2) you haven't accepted https://hf.co/pyannote/speaker-diarization-3.1 terms; "
+                    "(3) you haven't accepted https://hf.co/pyannote/segmentation-3.0 terms."
                 )
             if torch.cuda.is_available():
                 pipeline = pipeline.to(torch.device("cuda"))
+
             print(f"[Diarize] loaded in {time.time()-t0:.1f}s, running...")
             annotation = pipeline(audio_path)
             speaker_segs = [
@@ -170,13 +133,15 @@ class Predictor(BasePredictor):
                 for turn, _, speaker in annotation.itertracks(yield_label=True)
             ]
             print(f"[Diarize] done in {time.time()-t0:.1f}s | {len(speaker_segs)} raw segs")
+
             del pipeline
             _release_cuda()
 
-        # ---- Whisper ----
+        # ---- Whisper transcription ----
         device = "cuda" if torch.cuda.is_available() else "cpu"
         compute_type = "float16" if device == "cuda" else "int8"
         model_size = DEFAULT_MODEL_BY_LANG.get(language, "large-v3-turbo")
+
         print(f"[Whisper] loading {model_size} on {device}/{compute_type}...")
         t0 = time.time()
         model = WhisperModel(model_size, device=device, compute_type=compute_type)
@@ -190,11 +155,11 @@ class Predictor(BasePredictor):
         whisper_segs = [
             {"start": s.start, "end": s.end, "text": s.text.strip()} for s in seg_iter
         ]
-        print(f"[Whisper] done in {time.time()-t0:.1f}s | {len(whisper_segs)} segs | detected={info.language}")
+        print(f"[Whisper] done in {time.time()-t0:.1f}s | {len(whisper_segs)} segs | lang={info.language}")
         del model
         _release_cuda()
 
-        # ---- Align speakers to whisper segs ----
+        # ---- Align speakers to whisper segs (max-overlap) ----
         aligned: list[dict] = []
         for ws in whisper_segs:
             best_spk = "SPEAKER_?"
@@ -206,7 +171,7 @@ class Predictor(BasePredictor):
                     best_spk = spk
             aligned.append({**ws, "speaker": best_spk})
 
-        # ---- Merge adjacent same-speaker segs ----
+        # ---- Merge adjacent same-speaker segments ----
         merged: list[dict] = []
         for seg in aligned:
             if (
@@ -224,23 +189,21 @@ class Predictor(BasePredictor):
                     "text": seg["text"],
                 })
 
-        total_elapsed = time.time() - t_start
+        elapsed = round(time.time() - t_start, 1)
         n_speakers = len(set(s["speaker"] for s in merged))
 
-        # ---- Build output ----
         result = {
             "segments": merged,
             "n_segments": len(merged),
             "n_speakers": n_speakers,
             "language_detected": info.language,
-            "elapsed_seconds": round(total_elapsed, 1),
+            "elapsed_seconds": elapsed,
             "model_used": model_size,
         }
         if output_format == "srt":
             result["srt"] = _to_srt(merged)
         elif output_format == "plain":
             result["plain_text"] = "\n\n".join(s["text"] for s in merged)
-        # json 已內含
 
-        print(f"[Pipeline] total {total_elapsed:.1f}s | {len(merged)} merged segs | {n_speakers} speakers")
+        print(f"[Pipeline] total {elapsed}s | {len(merged)} merged segs | {n_speakers} speakers")
         return result
